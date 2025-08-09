@@ -1,10 +1,14 @@
+# vienna_bargain_bot.py
 import requests
 import time
 from bs4 import BeautifulSoup
+import threading
+import os
 
-BOT_TOKEN = "7582551179:AAFl3EDbpByJKhQ72d5el67wbonkm1tRue8"
-CHAT_ID = "580150046"
-CHECK_INTERVAL = 60
+# Read tokens from environment variables for safety (set these in Render dashboard)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7582551179:AAFl3EDbpByJKhQ72d5el67wbonkm1tRue8")
+CHAT_ID = os.environ.get("CHAT_ID", "580150046")
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 
 CATEGORIES = {
     "Smartphones": "https://www.willhaben.at/iad/kaufen-und-verkaufen/handys-telefonie-handys-angebot?areaId=900&sfId=1673544045",
@@ -21,24 +25,26 @@ PRICE_LIMITS = {
 }
 
 seen_links = set()
+_lock = threading.Lock()
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=payload)
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
         print("Error sending Telegram message:", e)
 
 def scrape_category(name, url):
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ViennaBot/1.0)"}
     try:
-        resp = requests.get(url, headers=headers)
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
-        print(f"Error fetching {name}:", e)
+        print(f"Error fetching {name}: {e}")
         return
-    
+
     for item in soup.select("article"):
         link_tag = item.find("a", href=True)
         price_tag = item.find("div", class_="price")
@@ -56,18 +62,23 @@ def scrape_category(name, url):
         except:
             continue
 
-        if price <= PRICE_LIMITS[name] and link not in seen_links:
-            seen_links.add(link)
-            msg = f"📦 <b>{name}</b>\n{title}\n💶 {price} EUR\n🔗 {link}"
-            send_telegram_message(msg)
+        with _lock:
+            already_seen = link in seen_links
+            if not already_seen and price <= PRICE_LIMITS.get(name, 9999):
+                seen_links.add(link)
+                msg = f"📦 <b>{name}</b>\n{title}\n💶 {price} EUR\n🔗 {link}"
+                send_telegram_message(msg)
 
-def main():
-    send_telegram_message("🚀 Vienna Bargain Bot started!")
-    print("Bot is running... checking every", CHECK_INTERVAL, "seconds.")
-    while True:
+def run_bot(stop_event):
+    """Main loop — run until stop_event is set."""
+    send_telegram_message("🚀 Vienna Bargain Bot started (web-service mode)!")
+    print("Bot started. Checking every", CHECK_INTERVAL, "seconds.")
+    while not stop_event.is_set():
         for category, url in CATEGORIES.items():
             scrape_category(category, url)
-        time.sleep(CHECK_INTERVAL)
-
-if __name__ == "__main__":
-    main()
+        # sleep in small steps so we can stop quickly if Render restarts
+        for _ in range(int(CHECK_INTERVAL)):
+            if stop_event.is_set():
+                break
+            time.sleep(1)
+    print("Bot stopping.")
