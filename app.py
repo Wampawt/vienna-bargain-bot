@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, jsonify
 import threading
 import os
@@ -6,7 +5,6 @@ from vienna_bargain_bot import run_bot
 
 app = Flask(__name__)
 
-stop_event = threading.Event()
 bot_thread = None
 
 @app.route("/")
@@ -21,7 +19,7 @@ def start_background_bot():
     global bot_thread
     if bot_thread and bot_thread.is_alive():
         return
-    bot_thread = threading.Thread(target=run_bot, args=(stop_event,), daemon=True)
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
 
 if __name__ == "__main__":
